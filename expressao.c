@@ -1,509 +1,325 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h> // Para sin, cos, tan, sqrt, log10, pow, isnan, fmod
-#include <ctype.h> // Para isdigit, isalpha
-#include "calculadora.h" // Inclui o cabeçalho do projeto
+#include <math.h>
+#include <ctype.h>
+#include "expressao.h" // ALTERADO
 
-// Define _USE_MATH_DEFINES para M_PI no Visual Studio (para PI)
 #ifdef _MSC_VER
 #define _USE_MATH_DEFINES
 #endif
 
-// --- Implementação da Pilha de Caracteres (para operadores e parênteses na conversão infixa->posfixa) ---
-#define MAX_PILHA_CHAR_SIZE 256
-static char pilhaChar[MAX_PILHA_CHAR_SIZE];
-static int topoChar = -1;
+#ifndef NAN
+#define NAN (0.0f/0.0f)
+#endif
 
-// Empilha um caractere na pilha de caracteres
-static void empilhaChar(char c) {
-    if (topoChar < MAX_PILHA_CHAR_SIZE - 1) {
-        pilhaChar[++topoChar] = c;
-    } else {
-        fprintf(stderr, "Erro: Pilha de caracteres cheia!\n");
+// --- Estrutura de Dados Interna ---
+
+#define MAX_PILHA_SIZE 256
+
+struct Calculadora {
+    char pilhaChar[MAX_PILHA_SIZE];
+    int topoChar;
+
+    float pilhaFloat[MAX_PILHA_SIZE];
+    int topoFloat;
+
+    char* pilhaString[MAX_PILHA_SIZE];
+    int topoString;
+};
+
+// --- Funções de Pilha (static) ---
+
+static void limparPilhaChar(Calculadora *calc) { calc->topoChar = -1; }
+static int empilhaChar(Calculadora *calc, char c) {
+    if (calc->topoChar >= MAX_PILHA_SIZE - 1) return 0;
+    calc->pilhaChar[++calc->topoChar] = c;
+    return 1;
+}
+static char desempilhaChar(Calculadora *calc) { return calc->topoChar != -1 ? calc->pilhaChar[calc->topoChar--] : '\0'; }
+static char topoPilhaChar(Calculadora *calc) { return calc->topoChar != -1 ? calc->pilhaChar[calc->topoChar] : '\0'; }
+static int pilhaCharVazia(Calculadora *calc) { return calc->topoChar == -1; }
+
+static void limparPilhaFloat(Calculadora *calc) { calc->topoFloat = -1; }
+static int empilhaFloat(Calculadora *calc, float f) {
+    if (calc->topoFloat >= MAX_PILHA_SIZE - 1) return 0;
+    calc->pilhaFloat[++calc->topoFloat] = f;
+    return 1;
+}
+static float desempilhaFloat(Calculadora *calc) { return calc->topoFloat != -1 ? calc->pilhaFloat[calc->topoFloat--] : NAN; }
+static int pilhaFloatVazia(Calculadora *calc) { return calc->topoFloat == -1; }
+
+static void limparPilhaString(Calculadora *calc) {
+    while (calc->topoString != -1) {
+        free(calc->pilhaString[calc->topoString--]);
     }
 }
-
-// Desempilha um caractere da pilha de caracteres
-static char desempilhaChar() {
-    if (topoChar != -1) {
-        return pilhaChar[topoChar--];
-    } else {
-        fprintf(stderr, "Erro: Pilha de caracteres vazia!\n");
-        return '\0'; // Retorno de erro
-    }
+static int empilhaString(Calculadora *calc, const char *s) {
+    if (calc->topoString >= MAX_PILHA_SIZE - 1) return 0;
+    calc->pilhaString[++calc->topoString] = strdup(s);
+    return calc->pilhaString[calc->topoString] != NULL;
 }
+static char* desempilhaString(Calculadora *calc) { return calc->topoString != -1 ? calc->pilhaString[calc->topoString--] : NULL; }
+static int pilhaStringVazia(Calculadora *calc) { return calc->topoString == -1; }
 
-// Retorna o caractere no topo da pilha de caracteres sem removê-lo
-static char topoPilhaChar() {
-    if (topoChar != -1) {
-        return pilhaChar[topoChar];
-    } else {
-        return '\0';
-    }
-}
+// --- Funções Auxiliares (static) ---
 
-// Verifica se a pilha de caracteres está vazia
-static int pilhaCharVazia() {
-    return topoChar == -1;
-}
-
-// Limpa a pilha de caracteres
-static void limparPilhaChar() {
-    topoChar = -1;
-}
-
-// --- Implementação da Pilha de Floats (para operandos na avaliação) ---
-#define MAX_PILHA_FLOAT_SIZE 256
-static float pilhaFloat[MAX_PILHA_FLOAT_SIZE];
-static int topoFloat = -1;
-
-// Empilha um float na pilha de floats
-static void empilhaFloat(float f) {
-    if (topoFloat < MAX_PILHA_FLOAT_SIZE - 1) {
-        pilhaFloat[++topoFloat] = f;
-    } else {
-        fprintf(stderr, "Erro: Pilha de floats cheia!\n");
-    }
-}
-
-// Desempilha um float da pilha de floats
-static float desempilhaFloat() {
-    if (topoFloat != -1) {
-        return pilhaFloat[topoFloat--];
-    } else {
-        fprintf(stderr, "Erro: Pilha de floats vazia!\n");
-        return NAN; // Retorno Not-a-Number para erro
-    }
-}
-
-// Verifica se a pilha de floats está vazia
-static int pilhaFloatVazia() {
-    return topoFloat == -1;
-}
-
-// Limpa a pilha de floats
-static void limparPilhaFloat() {
-    topoFloat = -1;
-}
-
-// --- Implementação da Pilha de Strings (para conversão posfixa para infixa) ---
-#define MAX_PILHA_STRING_SIZE 256
-static char *pilhaString[MAX_PILHA_STRING_SIZE];
-static int topoString = -1;
-
-// Empilha uma string na pilha de strings
-static void empilhaString(char *s) {
-    if (topoString < MAX_PILHA_STRING_SIZE - 1) {
-        // Aloca memória para a nova string e copia o conteúdo
-        pilhaString[++topoString] = (char *)malloc(strlen(s) + 1);
-        if (pilhaString[topoString] == NULL) {
-            fprintf(stderr, "Erro: Falha na alocacao de memoria para string da pilha!\n");
-            return;
-        }
-        strcpy(pilhaString[topoString], s);
-    } else {
-        fprintf(stderr, "Erro: Pilha de strings cheia!\n");
-    }
-}
-
-// Desempilha uma string da pilha de strings
-static char *desempilhaString() {
-    if (topoString != -1) {
-        char *s = pilhaString[topoString--];
-        return s; // Retorna a string alocada (quem chama deve liberar)
-    } else {
-        fprintf(stderr, "Erro: Pilha de strings vazia!\n");
-        return NULL; // Retorno de erro
-    }
-}
-
-// Verifica se a pilha de strings está vazia
-static int pilhaStringVazia() {
-    return topoString == -1;
-}
-
-// Limpa a pilha de strings e libera a memória alocada para as strings
-static void limparPilhaString() {
-    while (!pilhaStringVazia()) {
-        free(desempilhaString()); // Libera a memória de cada string
-    }
-    topoString = -1;
-}
-
-// --- Funções Auxiliares Comuns ---
-
-// Verifica se um caractere é um operador binário
-static int ehOperador(char c) {
-    return (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '^');
-}
-
-// Verifica se uma string corresponde a uma função unária
+static int ehOperador(char c) { return c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '^'; }
 static int ehFuncao(const char *s) {
-    return (strcmp(s, "raiz") == 0 || strcmp(s, "sen") == 0 ||
-            strcmp(s, "cos") == 0 || strcmp(s, "tg") == 0 ||
-            strcmp(s, "log") == 0);
+    const char *funcoes[] = {"raiz", "sen", "cos", "tg", "log", NULL};
+    for (int i = 0; funcoes[i]; i++) if (strcmp(s, funcoes[i]) == 0) return 1;
+    return 0;
 }
-
-// Retorna a precedência de um operador
 static int precedencia(char operador) {
-    if (operador == '+' || operador == '-') return 1;
-    if (operador == '*' || operador == '/' || operador == '%') return 2;
-    if (operador == '^') return 3;
-    // Caracteres especiais para funções na pilha de char
-    if (operador == 'R' || operador == 'S' || operador == 'C' || operador == 'T' || operador == 'L') return 4;
-    return 0; // Para parênteses ou outros
+    switch(operador) {
+        case '+': case '-': return 1;
+        case '*': case '/': case '%': return 2;
+        case '^': return 3;
+        case 'R': case 'S': case 'C': case 'T': case 'L': return 4; // Funções
+        default: return 0;
+    }
 }
-
-// Realiza a operação binária (op1 operador op2)
-static float realizaOperacao(char operador, float op2, float op1) {
-    switch (operador) {
+static int adicionar_operador_a_saida(char op, char* buf, int idx, size_t max_len) {
+    switch (op) {
+        case 'R': return snprintf(buf + idx, max_len - idx, "raiz ");
+        case 'S': return snprintf(buf + idx, max_len - idx, "sen ");
+        case 'C': return snprintf(buf + idx, max_len - idx, "cos ");
+        case 'T': return snprintf(buf + idx, max_len - idx, "tg ");
+        case 'L': return snprintf(buf + idx, max_len - idx, "log ");
+        default:  return snprintf(buf + idx, max_len - idx, "%c ", op);
+    }
+}
+static float realizaOperacao(char op, float op2, float op1) {
+    switch (op) {
         case '+': return op1 + op2;
         case '-': return op1 - op2;
         case '*': return op1 * op2;
-        case '/':
-            if (op2 == 0) {
-                fprintf(stderr, "Erro: Divisao por zero!\n");
-                return NAN; // Retorna Not-a-Number para erro
-            }
-            return op1 / op2;
-        case '%':
-            // fmod é usado para o resto da divisão de floats
-            if (op2 == 0) {
-                fprintf(stderr, "Erro: Modulo por zero!\n");
-                return NAN;
-            }
-            return fmod(op1, op2);
+        case '/': return op2 != 0 ? op1 / op2 : NAN;
+        case '%': return op2 != 0 ? fmod(op1, op2) : NAN;
         case '^': return pow(op1, op2);
-        default: return NAN; // Erro, operador desconhecido
+        default: return NAN;
     }
 }
-
-// Realiza a operação de função unária (funcao(operando))
-static float realizaFuncao(const char *funcao, float operando) {
-    if (strcmp(funcao, "raiz") == 0) {
-        if (operando < 0) {
-            fprintf(stderr, "Erro: Raiz quadrada de numero negativo!\n");
-            return NAN;
-        }
-        return sqrt(operando);
-    } else if (strcmp(funcao, "sen") == 0) {
-        return sin(operando * M_PI / 180.0); // Converte graus para radianos
-    } else if (strcmp(funcao, "cos") == 0) {
-        return cos(operando * M_PI / 180.0); // Converte graus para radianos
-    } else if (strcmp(funcao, "tg") == 0) {
-        // Tangente de 90 + k*180 graus é indefinida
-        if (fmod(operando, 180.0) == 90.0 || fmod(operando, 180.0) == -90.0) {
-            fprintf(stderr, "Erro: Tangente de angulo indefinido (90 + k*180)!\n");
-            return NAN;
-        }
-        return tan(operando * M_PI / 180.0); // Converte graus para radianos
-    } else if (strcmp(funcao, "log") == 0) {
-        if (operando <= 0) {
-            fprintf(stderr, "Erro: Logaritmo de numero nao positivo!\n");
-            return NAN;
-        }
-        return log10(operando);
+static float realizaFuncao(const char *func, float op) {
+    if (strcmp(func, "raiz") == 0) return op >= 0 ? sqrt(op) : NAN;
+    if (strcmp(func, "log") == 0) return op > 0 ? log10(op) : NAN;
+    double ang_rad = op * M_PI / 180.0;
+    if (strcmp(func, "sen") == 0) return sin(ang_rad);
+    if (strcmp(func, "cos") == 0) return cos(ang_rad);
+    if (strcmp(func, "tg") == 0) {
+        if (fmod(op, 180.0) == 90.0 || fmod(op, 180.0) == -90.0) return NAN;
+        return tan(ang_rad);
     }
-    return NAN; // Erro, função desconhecida
+    return NAN;
 }
 
 
-// --- Funções principais do calculadora.h ---
+// --- Implementação da API Pública ---
 
-// Retorna a forma inFixa de Str (posFixa)
-char *getFormaInFixa(char *Str) {
-    static char inFixaOutput[512]; // Buffer estático para o resultado
-    char *token;
-    char *temp_str; // Ponteiro para a cópia modificável da string
-    char buffer[256]; // Buffer para construir sub-expressões
-
-    limparPilhaString();
-    
-    // Aloca memória para a cópia da string original, para que strtok possa modificá-la
-    temp_str = strdup(Str); 
-    if (temp_str == NULL) {
-        fprintf(stderr, "Erro: Falha na alocacao de memoria para getFormaInFixa!\n");
-        return NULL;
+Calculadora* criar_calculadora(void) {
+    Calculadora* calc = (Calculadora*)malloc(sizeof(Calculadora));
+    if (calc) {
+        calc->topoChar = -1;
+        calc->topoFloat = -1;
+        calc->topoString = -1;
     }
-
-    token = strtok(temp_str, " "); // Tokeniza por espaços
-
-    while (token != NULL) {
-        if (isdigit(token[0]) || (token[0] == '-' && strlen(token) > 1 && isdigit(token[1])) || (token[0] == '.' && strlen(token) > 1 && isdigit(token[1]))) { 
-            // É um número (considera números negativos e decimais que começam com '.')
-            empilhaString(token);
-        } else if (ehOperador(token[0]) && strlen(token) == 1) { // É um operador
-            if (pilhaStringVazia()) { 
-                fprintf(stderr, "Erro: Expressao posfixa invalida (operador sem operandos)!\n"); 
-                free(temp_str); // Libera a memória da cópia
-                limparPilhaString();
-                return NULL; 
-            }
-            char *op2 = desempilhaString();
-            if (pilhaStringVazia()) { 
-                fprintf(stderr, "Erro: Expressao posfixa invalida (operador binario com apenas um operando)!\n"); 
-                free(op2); // Libera o que foi desempilhado
-                free(temp_str);
-                limparPilhaString();
-                return NULL; 
-            }
-            char *op1 = desempilhaString();
-
-            // Construir a sub-expressão com parênteses
-            sprintf(buffer, "( %s %c %s )", op1, token[0], op2);
-            empilhaString(buffer);
-            
-            free(op1); // Libera a memória das sub-expressões desempilhadas
-            free(op2);
-        } else if (ehFuncao(token)) { // É uma função unária
-            if (pilhaStringVazia()) { 
-                fprintf(stderr, "Erro: Expressao posfixa invalida (funcao sem operando)!\n"); 
-                free(temp_str);
-                limparPilhaString();
-                return NULL; 
-            }
-            char *op1 = desempilhaString();
-            
-            // Construir a sub-expressão para a função
-            sprintf(buffer, "%s( %s )", token, op1);
-            empilhaString(buffer);
-            free(op1);
-        } else {
-            // Token inválido ou não reconhecido
-            fprintf(stderr, "Erro: Token invalido na expressao posfixa para conversao: '%s'!\n", token);
-            free(temp_str);
-            limparPilhaString();
-            return NULL;
-        }
-        token = strtok(NULL, " ");
-    }
-
-    if (!pilhaStringVazia() && topoString == 0) { // Deve sobrar apenas um elemento na pilha
-        char *final_expr = desempilhaString();
-        strcpy(inFixaOutput, final_expr);
-        free(final_expr); // Libera a última string alocada
-    } else {
-        fprintf(stderr, "Erro: Expressao posfixa malformada (operandos sobrando/faltando)!\n");
-        strcpy(inFixaOutput, ""); // Expressão vazia ou erro
-    }
-    
-    free(temp_str); // Libera a cópia da string original
-    limparPilhaString(); // Garante que a pilha está vazia
-
-    return inFixaOutput;
+    return calc;
 }
 
-
-// Calcula o valor de Str (na forma posFixa)
-float getValor(char *Str) {
-    char *token;
-    char *temp_str; // Ponteiro para a cópia modificável da string
-    float op1, op2, resultado;
-
-    limparPilhaFloat();
-    
-    // Aloca memória para a cópia da string original, para que strtok possa modificá-la
-    temp_str = strdup(Str);
-    if (temp_str == NULL) {
-        fprintf(stderr, "Erro: Falha na alocacao de memoria para getValor!\n");
-        return NAN;
-    }
-
-    token = strtok(temp_str, " ");
-
-    while (token != NULL) {
-        if (isdigit(token[0]) || (token[0] == '-' && strlen(token) > 1 && isdigit(token[1])) || (token[0] == '.' && strlen(token) > 1 && isdigit(token[1]))) {
-            // É um número (considera números negativos e decimais que começam com '.')
-            empilhaFloat(atof(token));
-        } else if (ehOperador(token[0]) && strlen(token) == 1) { // É um operador binário
-            if (pilhaFloatVazia()) { 
-                fprintf(stderr, "Erro: Expressao posfixa invalida (operador sem operandos)!\n"); 
-                free(temp_str); 
-                return NAN; 
-            }
-            op2 = desempilhaFloat();
-            if (pilhaFloatVazia()) { 
-                fprintf(stderr, "Erro: Expressao posfixa invalida (operador binario com apenas um operando)!\n"); 
-                free(temp_str); 
-                return NAN; 
-            }
-            op1 = desempilhaFloat();
-            resultado = realizaOperacao(token[0], op2, op1);
-            if (isnan(resultado)) { 
-                free(temp_str); 
-                limparPilhaFloat(); 
-                return NAN; 
-            } // Propaga erro
-            empilhaFloat(resultado);
-        } else if (ehFuncao(token)) { // É uma função unária
-            if (pilhaFloatVazia()) { 
-                fprintf(stderr, "Erro: Expressao posfixa invalida (funcao sem operando)!\n"); 
-                free(temp_str); 
-                return NAN; 
-            }
-            op1 = desempilhaFloat();
-            resultado = realizaFuncao(token, op1);
-            if (isnan(resultado)) { 
-                free(temp_str); 
-                limparPilhaFloat(); 
-                return NAN; 
-            } // Propaga erro
-            empilhaFloat(resultado);
-        } else {
-            // Token inválido
-            fprintf(stderr, "Erro: Token invalido na expressao posfixa para avaliacao: '%s'!\n", token);
-            free(temp_str);
-            limparPilhaFloat();
-            return NAN;
-        }
-        token = strtok(NULL, " ");
-    }
-
-    if (!pilhaFloatVazia() && topoFloat == 0) { // Deve sobrar apenas um elemento na pilha
-        resultado = desempilhaFloat();
-        free(temp_str); // Libera a cópia da string original
-        limparPilhaFloat();
-        return resultado;
-    } else {
-        // Erro na expressao (ex: operadores faltando operandos ou operandos sobrando)
-        fprintf(stderr, "Erro: Expressao posfixa malformada ou operandos sobrando/faltando.\n");
-        free(temp_str);
-        limparPilhaFloat();
-        return NAN;
+void destruir_calculadora(Calculadora* calc) {
+    if (calc) {
+        limparPilhaString(calc);
+        free(calc);
     }
 }
 
+char* converter_infixo_para_posfixo(Calculadora* calc, const char* infixa) {
+    if (!calc || !infixa) return NULL;
 
-// --- Funções Auxiliares Internas (NÃO fazem parte do calculadora.h, mas são necessárias) ---
+    size_t buffer_len = strlen(infixa) * 2 + 100;
+    char *posfixa = (char*)malloc(buffer_len);
+    if (!posfixa) return NULL;
 
-// Retorna a forma posFixa de Str (infixa) - FUNÇÃO AUXILIAR INTERNA
-// Esta função é interna e não é exposta no .h, mas é utilizada para permitir
-// que o main.c teste a avaliação de expressões infixadas, convertendo-as
-// primeiro para pós-fixada e depois avaliando com getValor.
-static char *getFormaPosFixa_Internal(char *Str) {
-    static char posFixa[512]; // Buffer estático para o resultado
-    char token_str[64]; // Para armazenar números ou funções lidos
-    int i = 0, k = 0, j = 0;
-    
-    limparPilhaChar();
-    memset(posFixa, 0, sizeof(posFixa)); // Limpa o buffer
+    limparPilhaChar(calc);
+    posfixa[0] = '\0';
+    int k = 0; // Índice para a string de saída
+    int i = 0;
+    int esperando_operando = 1;
 
-    while (Str[i] != '\0') {
-        if (Str[i] == ' ') { // Ignora espaços
+    while (infixa[i] != '\0' && (size_t)k < buffer_len -1) {
+        if (isspace(infixa[i])) { i++; continue; }
+
+        if (isdigit(infixa[i]) || (infixa[i] == '.' && isdigit(infixa[i+1]))) {
+            char num_buf[64];
+            int j = 0;
+            while (j < 63 && (isdigit(infixa[i]) || infixa[i] == '.')) num_buf[j++] = infixa[i++];
+            num_buf[j] = '\0';
+            k += snprintf(posfixa + k, buffer_len - k, "%s ", num_buf);
+            esperando_operando = 0;
+            continue;
+        }
+        
+        if (esperando_operando && infixa[i] == '-') {
+            char num_buf[64];
+            int j = 0;
+            num_buf[j++] = infixa[i++];
+            while (j < 63 && (isdigit(infixa[i]) || infixa[i] == '.')) num_buf[j++] = infixa[i++];
+            num_buf[j] = '\0';
+            k += snprintf(posfixa + k, buffer_len - k, "%s ", num_buf);
+            esperando_operando = 0;
+            continue;
+        }
+
+        if (isalpha(infixa[i])) {
+            char func_buf[10];
+            int j = 0;
+            while (j < 9 && isalpha(infixa[i])) func_buf[j++] = infixa[i++];
+            func_buf[j] = '\0';
+            if (!ehFuncao(func_buf)) { free(posfixa); return NULL; }
+            char marcador = 0;
+            if (strcmp(func_buf, "raiz") == 0) marcador = 'R';
+            else if (strcmp(func_buf, "sen") == 0) marcador = 'S';
+            else if (strcmp(func_buf, "cos") == 0) marcador = 'C';
+            else if (strcmp(func_buf, "tg") == 0) marcador = 'T';
+            else if (strcmp(func_buf, "log") == 0) marcador = 'L';
+            empilhaChar(calc, marcador);
+            continue;
+        }
+
+        if (infixa[i] == '(') {
+            empilhaChar(calc, '(');
+            esperando_operando = 1;
             i++;
             continue;
         }
         
-        if (isdigit(Str[i]) || Str[i] == '.') { // É um número
-            j = 0;
-            while (isdigit(Str[i]) || Str[i] == '.') {
-                token_str[j++] = Str[i++];
+        if (infixa[i] == ')') {
+            while (!pilhaCharVazia(calc) && topoPilhaChar(calc) != '(') {
+                k += adicionar_operador_a_saida(desempilhaChar(calc), posfixa, k, buffer_len);
             }
-            token_str[j] = '\0';
-            strcat(posFixa, token_str);
-            strcat(posFixa, " "); // Adiciona espaço após o número
-            continue;
-        }
-        
-        // Verifica se é uma função (ex: sen, cos, log, raiz, tg)
-        if (isalpha(Str[i])) {
-            j = 0;
-            // Lê a string da função
-            while (isalpha(Str[i]) && j < 63) { 
-                token_str[j++] = Str[i++];
-            }
-            token_str[j] = '\0';
-
-            if (ehFuncao(token_str)) {
-                // Empilha um caractere marcador para cada função
-                if (strcmp(token_str, "raiz") == 0) empilhaChar('R');
-                else if (strcmp(token_str, "sen") == 0) empilhaChar('S');
-                else if (strcmp(token_str, "cos") == 0) empilhaChar('C');
-                else if (strcmp(token_str, "tg") == 0) empilhaChar('T');
-                else if (strcmp(token_str, "log") == 0) empilhaChar('L');
-                
-            } else {
-                fprintf(stderr, "Erro: Caracteres invalidos ou funcao nao reconhecida na expressao infixada: '%s'!\n", token_str);
-                return NULL;
-            }
-            continue; // Continua para o próximo caractere
-        }
-
-        if (Str[i] == '(') {
-            empilhaChar(Str[i++]);
-            continue;
-        }
-
-        if (Str[i] == ')') {
-            while (!pilhaCharVazia() && topoPilhaChar() != '(') {
-                char op = desempilhaChar();
-                if (op != 'R' && op != 'S' && op != 'C' && op != 'T' && op != 'L') { // Não é uma função (operador normal)
-                    posFixa[k++] = op;
-                    posFixa[k++] = ' ';
-                } else { // É uma função (adiciona a string da função)
-                    if (op == 'R') strcat(posFixa, "raiz ");
-                    else if (op == 'S') strcat(posFixa, "sen ");
-                    else if (op == 'C') strcat(posFixa, "cos ");
-                    else if (op == 'T') strcat(posFixa, "tg ");
-                    else if (op == 'L') strcat(posFixa, "log ");
-                }
-            }
-            if (!pilhaCharVazia() && topoPilhaChar() == '(') {
-                desempilhaChar(); // Desempilha o '('
-            } else {
-                fprintf(stderr, "Erro: Parenteses desbalanceados na expressao infixada!\n");
-                return NULL; // Erro de parênteses desbalanceados
+            if (pilhaCharVazia(calc)) { free(posfixa); return NULL; } // Parênteses desbalanceados
+            desempilhaChar(calc); // Pop '('
+            if (!pilhaCharVazia(calc) && isalpha(topoPilhaChar(calc))) {
+                 k += adicionar_operador_a_saida(desempilhaChar(calc), posfixa, k, buffer_len);
             }
             i++;
+            esperando_operando = 0;
             continue;
         }
 
-        if (ehOperador(Str[i])) {
-            while (!pilhaCharVazia() && 
-                   topoPilhaChar() != '(' && 
-                   precedencia(topoPilhaChar()) >= precedencia(Str[i])) {
-                char op = desempilhaChar();
-                if (op != 'R' && op != 'S' && op != 'C' && op != 'T' && op != 'L') { // Não é uma função
-                    posFixa[k++] = op;
-                    posFixa[k++] = ' ';
-                } else { // É uma função
-                    if (op == 'R') strcat(posFixa, "raiz ");
-                    else if (op == 'S') strcat(posFixa, "sen ");
-                    else if (op == 'C') strcat(posFixa, "cos ");
-                    else if (op == 'T') strcat(posFixa, "tg ");
-                    else if (op == 'L') strcat(posFixa, "log ");
-                }
+        if (ehOperador(infixa[i])) {
+            int assoc_dir = (infixa[i] == '^');
+            while (!pilhaCharVazia(calc) && topoPilhaChar(calc) != '(' &&
+                   (precedencia(topoPilhaChar(calc)) > precedencia(infixa[i]) ||
+                   (precedencia(topoPilhaChar(calc)) == precedencia(infixa[i]) && !assoc_dir))) {
+                k += adicionar_operador_a_saida(desempilhaChar(calc), posfixa, k, buffer_len);
             }
-            empilhaChar(Str[i++]);
+            empilhaChar(calc, infixa[i]);
+            i++;
+            esperando_operando = 1;
             continue;
         }
         
-        // Caractere inesperado
-        fprintf(stderr, "Erro: Caractere inesperado na expressao infixada: '%c'!\n", Str[i]);
-        return NULL; // Ou trate o erro de outra forma
+        free(posfixa); return NULL; // Caractere inválido
     }
 
-    while (!pilhaCharVazia()) {
-        char op = desempilhaChar();
-        if (op == '(') {
-            fprintf(stderr, "Erro: Parenteses desbalanceados na expressao infixada!\n");
-            return NULL; // Erro de parênteses desbalanceados
-        }
-        if (op != 'R' && op != 'S' && op != 'C' && op != 'T' && op != 'L') { // Não é uma função
-            posFixa[k++] = op;
-            posFixa[k++] = ' ';
-        } else { // É uma função
-            if (op == 'R') strcat(posFixa, "raiz ");
-            else if (op == 'S') strcat(posFixa, "sen ");
-            else if (op == 'C') strcat(posFixa, "cos ");
-            else if (op == 'T') strcat(posFixa, "tg ");
-            else if (op == 'L') strcat(posFixa, "log ");
-        }
+    while(!pilhaCharVazia(calc)) {
+        char op = desempilhaChar(calc);
+        if (op == '(') { free(posfixa); return NULL; } // Parênteses desbalanceados
+        k += adicionar_operador_a_saida(op, posfixa, k, buffer_len);
     }
-    posFixa[k] = '\0'; // Termina a string
-    // Remove o espaço extra no final, se houver
-    if (k > 0 && posFixa[k-1] == ' ') posFixa[k-1] = '\0';
 
-    return posFixa;
+    if (k > 0) posfixa[k-1] = '\0'; else posfixa[k] = '\0';
+    return posfixa;
+}
+
+char* converter_posfixo_para_infixo(Calculadora* calc, const char* posfixa) {
+    if (!calc || !posfixa) return NULL;
+    limparPilhaString(calc);
+
+    char* copia_posfixa = strdup(posfixa);
+    if (!copia_posfixa) return NULL;
+
+    char* token = strtok(copia_posfixa, " ");
+    while(token) {
+        if (isdigit(token[0]) || (token[0] == '-' && strlen(token) > 1) || token[0] == '.') {
+            if (!empilhaString(calc, token)) {
+                free(copia_posfixa); limparPilhaString(calc); return NULL;
+            }
+        } else if (ehOperador(token[0]) && strlen(token) == 1) {
+            char* op2 = desempilhaString(calc);
+            char* op1 = desempilhaString(calc);
+            if (!op1 || !op2) { free(op1); free(op2); free(copia_posfixa); limparPilhaString(calc); return NULL; }
+            
+            size_t len = strlen(op1) + strlen(op2) + 10;
+            char* buffer = malloc(len);
+            if(!buffer) { free(op1); free(op2); free(copia_posfixa); limparPilhaString(calc); return NULL; }
+
+            snprintf(buffer, len, "( %s %s %s )", op1, token, op2);
+            if (!empilhaString(calc, buffer)) {
+                free(buffer); free(op1); free(op2); free(copia_posfixa); limparPilhaString(calc); return NULL;
+            }
+            free(buffer); free(op1); free(op2);
+        } else if (ehFuncao(token)) {
+            char* op1 = desempilhaString(calc);
+            if (!op1) { free(copia_posfixa); limparPilhaString(calc); return NULL; }
+
+            size_t len = strlen(op1) + strlen(token) + 10;
+            char* buffer = malloc(len);
+             if(!buffer) { free(op1); free(copia_posfixa); limparPilhaString(calc); return NULL; }
+
+            snprintf(buffer, len, "%s( %s )", token, op1);
+             if (!empilhaString(calc, buffer)) {
+                free(buffer); free(op1); free(copia_posfixa); limparPilhaString(calc); return NULL;
+            }
+            free(buffer); free(op1);
+        } else {
+            free(copia_posfixa); limparPilhaString(calc); return NULL; // Token inválido
+        }
+        token = strtok(NULL, " ");
+    }
+    free(copia_posfixa);
+
+    if (calc->topoString != 0) { limparPilhaString(calc); return NULL; }
+    return desempilhaString(calc);
+}
+
+CalcStatus calcular_valor_posfixo(Calculadora* calc, const char* posfixa, float* resultado) {
+    if (!calc || !posfixa || !resultado) return CALC_ERRO_DESCONHECIDO;
+    limparPilhaFloat(calc);
+
+    char* copia_posfixa = strdup(posfixa);
+    if (!copia_posfixa) return CALC_ERRO_MEMORIA;
+
+    char* token = strtok(copia_posfixa, " ");
+    while(token) {
+        if (isdigit(token[0]) || (token[0] == '-' && strlen(token) > 1) || token[0] == '.') {
+            if (!empilhaFloat(calc, atof(token))) { free(copia_posfixa); return CALC_ERRO_MEMORIA; }
+        } else if (ehOperador(token[0]) && strlen(token) == 1) {
+            float op2 = desempilhaFloat(calc);
+            float op1 = desempilhaFloat(calc);
+            if (isnan(op1) || isnan(op2)) { free(copia_posfixa); return CALC_ERRO_SINTAXE; }
+            float res = realizaOperacao(token[0], op2, op1);
+            if (isnan(res)) { free(copia_posfixa); return CALC_ERRO_MATEMATICO; }
+            if (!empilhaFloat(calc, res)) { free(copia_posfixa); return CALC_ERRO_MEMORIA; }
+        } else if (ehFuncao(token)) {
+            float op1 = desempilhaFloat(calc);
+            if (isnan(op1)) { free(copia_posfixa); return CALC_ERRO_SINTAXE; }
+            float res = realizaFuncao(token, op1);
+            if (isnan(res)) { free(copia_posfixa); return CALC_ERRO_MATEMATICO; }
+            if (!empilhaFloat(calc, res)) { free(copia_posfixa); return CALC_ERRO_MEMORIA; }
+        } else {
+            free(copia_posfixa); return CALC_ERRO_SINTAXE;
+        }
+        token = strtok(NULL, " ");
+    }
+    free(copia_posfixa);
+
+    float final_res = desempilhaFloat(calc);
+    if (isnan(final_res) || !pilhaFloatVazia(calc)) {
+        return CALC_ERRO_SINTAXE;
+    }
+
+    *resultado = final_res;
+    return CALC_SUCESSO;
 }
