@@ -1,90 +1,81 @@
 #include <stdio.h>
-#include <string.h>
-#include <math.h> // Para isnan
-#include "calculadora.h" // Inclui o cabeçalho do projeto
+#include <stdlib.h>
+#include <math.h> 
+#include "expressao.h" // ALTERADO
 
-// Protótipo da função auxiliar interna para conversão de infix para posfix,
-// pois ela não está exposta no calculadora.h.
-// Ela é necessária para testar a avaliação de expressões infixadas.
-static char *getFormaPosFixa_Internal(char *Str);
+int comparar_floats(float a, float b, float epsilon) {
+    return fabs(a - b) < epsilon;
+}
 
+void testar_expressao(Calculadora* calc, const char* infixa, float valor_esperado, int testar_erro) {
+    printf("----------------------------------------\n");
+    printf("Expressao Infixa: \"%s\"\n", infixa);
 
-// Função auxiliar para executar e exibir os testes de avaliação
-void executarTesteAvaliacao(const char *expressaoInfixaOriginal, const char *expressaoPosFixaEntrada, float valorEsperado) {
-    Expressao exp;
+    char* posfixa = converter_infixo_para_posfixo(calc, infixa);
+    if (!posfixa) {
+        if (testar_erro) {
+            printf(">> SUCESSO: Erro de sintaxe na conversao capturado como esperado.\n");
+        } else {
+            printf(">> FALHA: Erro inesperado na conversao para posfixa.\n");
+        }
+        return;
+    }
+    printf("Forma Posfixa   : \"%s\"\n", posfixa);
+
+    float resultado;
+    CalcStatus status = calcular_valor_posfixo(calc, posfixa, &resultado);
+
+    if (testar_erro) {
+        if (status != CALC_SUCESSO) {
+            printf(">> SUCESSO: Erro de calculo capturado como esperado (Status: %d).\n", status);
+        } else {
+            printf(">> FALHA: Um erro era esperado, mas o calculo foi bem sucedido (Resultado: %f).\n", resultado);
+        }
+    } else {
+        if (status == CALC_SUCESSO) {
+            printf("Resultado       : %f\n", resultado);
+            if (comparar_floats(resultado, valor_esperado, 0.01f)) {
+                printf(">> SUCESSO: Valor calculado corresponde ao esperado (%f).\n", valor_esperado);
+            } else {
+                printf(">> FALHA: Valor calculado (%f) diferente do esperado (%f).\n", resultado, valor_esperado);
+            }
+        } else {
+            printf(">> FALHA: Erro inesperado no calculo (Status: %d).\n", status);
+        }
+    }
     
-    // Configura a expressão pós-fixada de entrada
-    strcpy(exp.posFixa, expressaoPosFixaEntrada);
-
-    // Converte a expressão pós-fixada para infixada para exibição
-    char *convertedInfixa = getFormaInFixa((char*)expressaoPosFixaEntrada);
-    if (convertedInfixa != NULL) {
-        strcpy(exp.inFixa, convertedInfixa);
-    } else {
-        strcpy(exp.inFixa, "ERRO NA CONVERSAO POSFIXA -> INFIXA");
-    }
-
-    // Avalia a expressão pós-fixada
-    exp.Valor = getValor((char*)expressaoPosFixaEntrada);
-
-    printf("--- Teste de Avaliacao ---\n");
-    printf("Expressao Infixa Original: %s\n", expressaoInfixaOriginal); // Para referência
-    printf("Expressao Pos-Fixa de Entrada: %s\n", exp.posFixa);
-    printf("Expressao Infixa Convertida: %s\n", exp.inFixa); // Convertida da pos-fixa
-    if (isnan(exp.Valor)) {
-        printf("Valor Calculado: ERRO\n");
-    } else {
-        printf("Valor Calculado: %.2f\n", exp.Valor);
-    }
-    printf("Valor Esperado: %.2f\n", valorEsperado);
-    printf("\n");
+    free(posfixa);
 }
-
-// Função auxiliar para testar a conversão de infixa para posfixa
-void testarConversaoInfixaPosFixa(const char *infixaInput, const char *posFixaEsperada) {
-    char *posFixaConvertida = getFormaPosFixa_Internal((char*)infixaInput);
-    printf("--- Teste de Conversao Infixa -> Pos-Fixa ---\n");
-    printf("Entrada Infixa: %s\n", infixaInput);
-    if (posFixaConvertida != NULL) {
-        printf("Pos-Fixa Convertida: %s\n", posFixaConvertida);
-        printf("Pos-Fixa Esperada: %s\n", posFixaEsperada);
-    } else {
-        printf("Erro na conversao de infixa para pos-fixa.\n");
-    }
-    printf("\n");
-}
-
 
 int main() {
-    printf("Avaliador de Expressoes Numericas\n\n");
+    printf("Criando instancia da calculadora...\n");
+    Calculadora* calc = criar_calculadora();
+    if (!calc) {
+        fprintf(stderr, "Falha critica: Nao foi possivel criar a calculadora!\n");
+        return 1;
+    }
 
-    // Testes de Avaliação (usando expressões pos-fixas diretamente para getValor)
-    printf("Testes de Avaliacao (usando getValor com entrada pos-fixa):\n\n");
-    executarTesteAvaliacao("(3 + 4) * 5", "3 4 + 5 *", 35.0); // Teste 1
-    executarTesteAvaliacao("7 * 2 + 4", "7 2 * 4 +", 18.0); // Teste 2
-    executarTesteAvaliacao("8 + (5 * (2 + 4))", "8 5 2 4 + * +", 38.0); // Teste 3
-    executarTesteAvaliacao("(6 / 2 + 3) * 4", "6 2 / 3 + 4 *", 24.0); // Teste 4
-    executarTesteAvaliacao("9 + (5 * (2 + 8 * 4))", "9 5 2 8 * 4 + * +", 109.0); // Teste 5
-    // Teste 6: log(2 + 3) / 5
-    executarTesteAvaliacao("log(2 + 3) / 5", "2 3 + log 5 /", 0.13979); // Aproximadamente 0.14
-    // Teste 7: (log10)^3 + 2 => log(10) ^ 3 + 2. Em pos-fixa 10 log 3 ^ 2 +
-    executarTesteAvaliacao("log(10) ^ 3 + 2", "10 log 3 ^ 2 +", 3.0); // log10(10) = 1; 1^3 + 2 = 3
-    // Teste 8: (45 + 60) * cos(30)
-    executarTesteAvaliacao("(45 + 60) * cos(30)", "45 60 + 30 cos *", 90.9347); // Aproximadamente 90.93
-    // Teste 9: sen(45)^2 + 0.5
-    executarTesteAvaliacao("sen(45)^2 + 0.5", "0.5 45 sen 2 ^ +", 0.5 + pow(sin(45.0 * M_PI / 180.0), 2.0)); // Aproximadamente 1.0
+    printf("\n--- Testes de Sucesso ---\n");
+    testar_expressao(calc, "(3 + 4) * 5", 35.0f, 0);
+    testar_expressao(calc, "7 * 2 + 4", 18.0f, 0);
+    testar_expressao(calc, "8 + (5 * (2 + 4))", 38.0f, 0);
+    testar_expressao(calc, "(6 / 2 + 3) * 4", 24.0f, 0);
+    testar_expressao(calc, "9 + (5 * (2 + 8 * 4))", 179.0f, 0);
+    testar_expressao(calc, "log(2 + 3) / 5", 0.13979f, 0);
+    testar_expressao(calc, "log(10) ^ 3 + 2", 3.0f, 0);
+    testar_expressao(calc, "(45 + 60) * cos(30)", 90.9326f, 0);
+    testar_expressao(calc, "sen(45)^2 + 0.5", 1.0f, 0);
+    testar_expressao(calc, "raiz(64) % 3", 2.0f, 0);
+    testar_expressao(calc, "-5 * (-3 + 1)", 10.0f, 0);
 
+    printf("\n--- Testes de Erro ---\n");
+    testar_expressao(calc, "10 / 0", 0.0f, 1); // Espera-se um erro de cálculo
+    testar_expressao(calc, "5 + * 3", 0.0f, 1); // Espera-se um erro de sintaxe
+    testar_expressao(calc, "(10 + 2", 0.0f, 1); // Espera-se um erro de sintaxe
 
-    printf("Testes de Conversao Infixa para Pos-Fixa (usando funcao auxiliar interna):\n\n");
-    testarConversaoInfixaPosFixa("(3 + 4) * 5", "3 4 + 5 *");
-    testarConversaoInfixaPosFixa("7 * 2 + 4", "7 2 * 4 +");
-    testarConversaoInfixaPosFixa("8 + (5 * (2 + 4))", "8 5 2 4 + * +");
-    testarConversaoInfixaPosFixa("(6 / 2 + 3) * 4", "6 2 / 3 + 4 *");
-    testarConversaoInfixaPosFixa("9 + (5 * (2 + 8 * 4))", "9 5 2 8 * 4 + * +");
-    testarConversaoInfixaPosFixa("log(2 + 3) / 5", "2 3 + log 5 /");
-    testarConversaoInfixaPosFixa("log(10) ^ 3 + 2", "10 log 3 ^ 2 +");
-    testarConversaoInfixaPosFixa("(45 + 60) * cos(30)", "45 60 + 30 cos *");
-    testarConversaoInfixaPosFixa("sen(45)^2 + 0.5", "45 sen 2 ^ 0.5 +"); // Note: a ordem dos operandos para '+' na posfixa pode variar dependendo da implementação
+    printf("----------------------------------------\n");
+    printf("Destruindo instancia da calculadora...\n");
+    destruir_calculadora(calc);
 
     return 0;
 }
